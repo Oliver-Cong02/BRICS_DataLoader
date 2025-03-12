@@ -97,8 +97,7 @@ AVLNode* insert(AVLNode* root, long long timecode, const string& frameidx) {
     return root;
 }
 
-// Look up the nearest timecode
-AVLNode* findClosest(AVLNode* root, long long target) {
+AVLNode* findClosest(AVLNode* root, long long target, long long threshold=1000) {
     AVLNode* closest = nullptr;
     long long minDiff = numeric_limits<long long>::max();
 
@@ -114,9 +113,13 @@ AVLNode* findClosest(AVLNode* root, long long target) {
             root = root->right;
     }
 
+    // Check if the closest found timecode is within the threshold
+    if (closest && minDiff > threshold) {
+        return nullptr;  // No frame found within the threshold
+    }
+
     return closest;
 }
-
 // Read txt file and build AVL Tree
 AVLNode* buildAVLTree(const string& filename) {
     ifstream file(filename);
@@ -156,9 +159,14 @@ int main() {
     cout << "The timecode to be looked up: ";
     cin >> query_timecode;
 
-    AVLNode* closest = findClosest(root, query_timecode);
+    long long threshold;
+    cout << "Threshold: ";
+    cin >> threshold;
+
+    AVLNode* closest = findClosest(root, query_timecode, threshold);
     if (closest) {
         cout << "Nearest Timecode: " << closest->timecode << ", frameidx: " << closest->frameidx << endl;
+        cout << "line in txt file: frame_" << closest->timecode << "_" << closest->frameidx << endl;
     } else {
         cout << "No Frame Found!" << endl;
     }
