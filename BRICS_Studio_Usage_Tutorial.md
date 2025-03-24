@@ -10,6 +10,7 @@
 
 - Please strictly follow the usage instructions in this tutorial.
 - Please **do not change any BRICS settings** including both the hardware and software. If you find bugs (e.g. you want to change the exposure…), please reach out to PhD students or Professor.
+- Do not need to shut down the computer after using.
 
 ### Basic Usage
 
