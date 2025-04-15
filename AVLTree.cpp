@@ -4,8 +4,11 @@
 #include <string>
 #include <limits>
 #include <cmath>
+#include <cstring> 
+#include <filesystem>  
 
 using namespace std;
+using namespace filesystem;
 
 // AVL tree node definition
 struct AVLNode {
@@ -120,6 +123,7 @@ AVLNode* findClosest(AVLNode* root, long long target, long long threshold=1000) 
 
     return closest;
 }
+
 // Read txt file and build AVL Tree
 AVLNode* buildAVLTree(const string& filename) {
     ifstream file(filename);
@@ -147,17 +151,153 @@ AVLNode* buildAVLTree(const string& filename) {
     return root;
 }
 
+// modify the serialization related functions
+void serializeHelper(AVLNode* root, ofstream& outFile) {
+    if (!root) {
+        char isNull = 0;
+        outFile.write(&isNull, sizeof(char));
+        return;
+    }
+    
+    char isNull = 1;
+    outFile.write(&isNull, sizeof(char));
+    
+    // write timecode
+    outFile.write(reinterpret_cast<char*>(&root->timecode), sizeof(long long));
+    
+    // write the length and content of frameidx
+    size_t len = root->frameidx.length();
+    outFile.write(reinterpret_cast<char*>(&len), sizeof(size_t));
+    outFile.write(root->frameidx.c_str(), len);
+    
+    serializeHelper(root->left, outFile);
+    serializeHelper(root->right, outFile);
+}
+
+// add file name processing function
+string getBaseFileName(const string& filename) {
+    // 先找到最后一个路径分隔符
+    size_t lastSlash = filename.find_last_of("/\\");
+    string onlyFileName = (lastSlash == string::npos) ? filename : filename.substr(lastSlash + 1);
+    
+    // 再去掉扩展名
+    size_t lastDot = onlyFileName.find_last_of(".");
+    if (lastDot != string::npos) {
+        return onlyFileName.substr(0, lastDot);
+    }
+    return onlyFileName;
+}
+
+void serialize(AVLNode* root, const string& filename, const string& save_dir) {
+    string baseFileName = getBaseFileName(filename);
+    
+    // 确保保存目录存在
+    path dir_path(save_dir);
+    if (!exists(dir_path)) {
+        create_directories(dir_path);
+    }
+    
+    path full_path = dir_path / (baseFileName + ".bin");
+    ofstream outFile(full_path, ios::binary);
+    if (!outFile.is_open()) {
+        cerr << "Unable to create binary file: " << full_path << endl;
+        return;
+    }
+    serializeHelper(root, outFile);
+    outFile.close();
+}
+
+AVLNode* deserializeHelper(ifstream& inFile) {
+    char isNull;
+    inFile.read(&isNull, sizeof(char));
+    
+    if (!isNull || inFile.eof()) return nullptr;
+    
+    // read timecode
+    long long timecode;
+    inFile.read(reinterpret_cast<char*>(&timecode), sizeof(long long));
+    
+    // read frameidx
+    size_t len;
+    inFile.read(reinterpret_cast<char*>(&len), sizeof(size_t));
+    string frameidx(len, '\0');
+    inFile.read(&frameidx[0], len);
+    
+    AVLNode* node = new AVLNode(timecode, frameidx);
+    node->left = deserializeHelper(inFile);
+    node->right = deserializeHelper(inFile);
+    
+    node->height = 1 + max(getHeight(node->left), getHeight(node->right));
+    return node;
+}
+
+AVLNode* deserialize(const string& filename, const string& save_dir) {
+    string baseFileName = getBaseFileName(filename);
+    path full_path = path(save_dir) / (baseFileName + ".bin");
+    
+    ifstream inFile(full_path, ios::binary);
+    if (!inFile.is_open()) {
+        return nullptr;
+    }
+    
+    AVLNode* root = deserializeHelper(inFile);
+    inFile.close();
+    return root;
+}
+
 int main() {
     string filename;
-    cout << "txt file name: ";
-    cin >> filename;
-    AVLNode* root = buildAVLTree(filename);
+    cout << "file name (.txt or .bin): ";
+    getline(cin, filename);
+    
+    AVLNode* root = nullptr;
+    string save_dir;
+    
+    // check if it is a bin file
+    if (filename.substr(filename.length() - 4) == ".bin") {
+        // if it is a bin file, load it directly
+        size_t lastSlash = filename.find_last_of("/\\");
+        save_dir = (lastSlash != string::npos) ? filename.substr(0, lastSlash) : ".";
+        root = deserialize(filename, save_dir);
+        if (!root) {
+            cout << "Unable to load tree from binary file!" << endl;
+            return 1;
+        }
+    } else {
+        // if it is a txt file, need to save directory
+        cout << "tree save directory: ";
+        getline(cin, save_dir);
+        
+        root = deserialize(filename, save_dir);
+        if (!root) {
+            cout << "No saved tree found, building new tree from txt file..." << endl;
+            root = buildAVLTree(filename);
+            if (root) {
+                cout << "Saving tree to binary file..." << endl;
+                serialize(root, filename, save_dir);
+            }
+        } else {
+            cout << "Tree loaded from saved binary file..." << endl;
+        }
+    }
 
-    if (!root) return 1;
+    if (!root) {
+        cout << "Unable to create or load tree!" << endl;
+        return 1;
+    }
 
-    long long query_timecode;
-    cout << "The timecode to be looked up: ";
-    cin >> query_timecode;
+    string timecode_str;
+    cout << "The timecode to be looked up (0 for only saving AVLtree binary file): ";
+    getline(cin, timecode_str);
+    long long query_timecode = stoll(timecode_str);
+
+    if (query_timecode == 0) {
+        if (filename.substr(filename.length() - 4) != ".bin") {
+            path full_path = path(save_dir) / (getBaseFileName(filename) + ".bin");
+            cout << "Done for saving to " << full_path << endl;
+        }
+        return 0;
+    }
 
     long long threshold;
     cout << "Threshold: ";
