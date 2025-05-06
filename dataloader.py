@@ -5,30 +5,56 @@ from functools import partial
 import torch
 from torchcodec.decoders import VideoDecoder
 from PIL import Image
+import json
 
-DATA_DIR = "/users/xcong2/data/brics/non-pii/brics-studio"
-DATE = "2025-04-10"
-SEQ_IDX = 1
+DATA_DIR = "/users/xcong2/data/users/xcong2/projects/BRICS_DataLoader/mydata"
+# STEP 1: Set the date and sequence index
+DATE = "2025-04-23"
+# SEQ_IDX = 1 # SEQ_IDX means the index of the sequence in the date folder
+START_TIMECODE = "174562411"
+FRAME_IDX_START = 0
 
+# STEP 2: Set the local save base directory
 LOCAL_SAVE_BASE_DIR = "/users/xcong2/data/users/xcong2/projects/BRICS_DataLoader/local_test"
 os.makedirs(LOCAL_SAVE_BASE_DIR, exist_ok=True)
+
+# STEP 3: Set the directory of the synced frames
+SYNCED_FRAMES_DIR = "/users/xcong2/data/public/brics_frames/local_test"
+SYNCED_INFO_SAVE_PATH = os.path.join(SYNCED_FRAMES_DIR, f'{DATE}_synced_frames', f"syncd_info_START_WITH_{START_TIMECODE}.json")
+
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 AVLTREE_PATH = os.path.join(CURRENT_DIR, "avltree")
 
-CAMERA_LIST = os.listdir(os.path.join(DATA_DIR, DATE))
-CAMERA_LIST = [camera for camera in CAMERA_LIST if 'cam' in camera]
+ALL_CAMERA_LIST = os.listdir(os.path.join(DATA_DIR, DATE))
+ALL_CAMERA_LIST = [camera for camera in ALL_CAMERA_LIST if 'cam' in camera]
+
+CAMERA_LIST = []
+for camera in ALL_CAMERA_LIST:
+    timecode_txt = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, camera)) if f.endswith('.txt')])
+    timecode_txt = [f for f in timecode_txt if f.startswith(camera+"_"+START_TIMECODE)]
+    
+    if len(timecode_txt) > 0:
+        CAMERA_LIST.append(camera)
 
 def Build_AVLtree():
     if not os.path.exists(AVLTREE_PATH):
         print(f"Error: AVLTree executable not found at {AVLTREE_PATH}")
         return
-    avl_save_dir = os.path.join(LOCAL_SAVE_BASE_DIR, DATE, f"SEQ_IDX_{SEQ_IDX:04d}")
+    # avl_save_dir = os.path.join(LOCAL_SAVE_BASE_DIR, DATE, f"SEQ_IDX_{SEQ_IDX:04d}")
+    avl_save_dir = os.path.join(LOCAL_SAVE_BASE_DIR, DATE, f"START_WITH_{START_TIMECODE}")
     os.makedirs(avl_save_dir, exist_ok=True)
 
     for camera in CAMERA_LIST:
-        print(" --------------------------------------------- ")
-        timecode_txt = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, camera)) if f.endswith('.txt')])[SEQ_IDX]
+        print(" Building AVL tree for camera: ", camera)
+        timecode_txt = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, camera)) if f.endswith('.txt')])
+        timecode_txt = [f for f in timecode_txt if f.startswith(camera+"_"+START_TIMECODE)]
+        
+        if len(timecode_txt) == 0:
+            print(f"Error: No timecode txt file found for camera {camera}!")
+            exit()
+
+        timecode_txt = timecode_txt[0]
         txt_path = os.path.join(DATA_DIR, DATE, camera, timecode_txt)
         
         camera_save_dir = os.path.join(avl_save_dir, camera)
@@ -64,11 +90,12 @@ def Build_AVLtree():
                 print("Errors:", stderr)
 
             if process.returncode == 0:
-                print(f"Successfully built AVL tree for camera {camera}")
+                # print(f"Successfully built AVL tree for camera {camera}")
 
                 expected_bin = os.path.join(camera_save_dir, os.path.splitext(timecode_txt)[0] + ".bin")
                 if os.path.exists(expected_bin):
-                    print(f"Verified: Binary file created at {expected_bin}")
+                    # print(f"Verified: Binary file created at {expected_bin}")
+                    pass
                 else:
                     print(f"Warning: Binary file not found at {expected_bin}")
             else:
@@ -153,9 +180,7 @@ def Search_AVLtree(avl_save_dir, camera, timecode, threshold):
     return -1
 
 def process_camera(args):
-    avl_save_dir, camera, timecode, threshold, reference_camera = args
-    if camera == reference_camera:
-        return None
+    avl_save_dir, camera, timecode, threshold = args
     
     result = Search_AVLtree(avl_save_dir, camera, timecode, threshold)
     if result == 0:
@@ -168,7 +193,8 @@ def process_camera(args):
     return (camera, result)
 
 def Search_Synced_Frames(REFERENCE_CAMERA, avl_save_dir, THRESHOLD):
-    REFERENCE_TXT = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, REFERENCE_CAMERA)) if f.endswith('.txt')])[SEQ_IDX]
+    REFERENCE_TXT = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, REFERENCE_CAMERA)) if f.endswith('.txt')])
+    REFERENCE_TXT = [f for f in REFERENCE_TXT if f.startswith(REFERENCE_CAMERA+"_"+START_TIMECODE)][0]
     REFERENCE_TXT_PATH = os.path.join(DATA_DIR, DATE, REFERENCE_CAMERA, REFERENCE_TXT)
 
     frameinfo = Load_txt_File(REFERENCE_TXT_PATH)
@@ -194,8 +220,7 @@ def Search_Synced_Frames(REFERENCE_CAMERA, avl_save_dir, THRESHOLD):
     for timecode in timecode_frameidx["timecode"]:
         syncd_info[timecode] = {}
         
-        camera_args = [(avl_save_dir, camera, timecode, THRESHOLD, REFERENCE_CAMERA) 
-                      for camera in CAMERA_LIST if camera != REFERENCE_CAMERA]
+        camera_args = [(avl_save_dir, camera, timecode, THRESHOLD) for camera in CAMERA_LIST]
         
         results = pool.map(process_camera, camera_args)
         
@@ -209,48 +234,59 @@ def Search_Synced_Frames(REFERENCE_CAMERA, avl_save_dir, THRESHOLD):
 
     return syncd_info
 
+def process_single_frame(args):
+    save_dir, camera, frame_info = args
+    frame_path = os.path.join(save_dir, f"{camera}_{frame_info}.png")
+    if os.path.exists(frame_path):
+        print(f"Frame already exists at {frame_path}")
+        return
+    
+    frame_num = int(frame_info.split("_")[-1]) - FRAME_IDX_START
+    VIDEO_NAME = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, camera)) if f.endswith('.mp4')])
+    VIDEO_NAME = [f for f in VIDEO_NAME if f.startswith(camera+"_"+START_TIMECODE)][0]
+    video_path = os.path.join(DATA_DIR, DATE, camera, VIDEO_NAME)
+    video_decoder = VideoDecoder(video_path, device='cpu')
+    frame = video_decoder[frame_num]
+    print(f"Frame shape: {frame.shape}")
+    frame_np = frame.numpy() # (3, H, W)
+    frame_np = frame_np.transpose(1, 2, 0) # (H, W, 3)
+    Image.fromarray(frame_np).save(frame_path)
+
 def Save_Synced_Frames(syncd_info):
-
-    # # torchcodec can only decode video in format yuv420p. However, BRICS videos are stored in yuvj422p.
-    # # So we first try cpu version.
-    # decoder = VideoDecoder(
-    #     video_path,
-    #     device='cpu',
-    # )
-    # frame = decoder[0]
-    # print(f"Frame shape: {frame.shape}")
-
-    SAVE_DIR = os.path.join(LOCAL_SAVE_BASE_DIR, f'{DATE}_synced_frames', f"SEQ_IDX_{SEQ_IDX:04d}")
+    SAVE_DIR = os.path.join(SYNCED_FRAMES_DIR, f'{DATE}_synced_frames', f"START_WITH_{START_TIMECODE}")
     os.makedirs(SAVE_DIR, exist_ok=True)
+    
     for timecode, syncd_frames in syncd_info.items():
         save_dir = os.path.join(SAVE_DIR, timecode)
         os.makedirs(save_dir, exist_ok=True)
-        for camera, frame_info in syncd_frames.items():
-            frame_path = os.path.join(save_dir, f"{camera}_{frame_info}.png")
-            if os.path.exists(frame_path):
-                print(f"Frame already exists at {frame_path}")
-                continue
-            
-            frame_num = int(frame_info.split("_")[-1])
-            VIDEO_NAME = sorted([f for f in os.listdir(os.path.join(DATA_DIR, DATE, camera)) if f.endswith('.mp4')])[SEQ_IDX]
-            video_path = os.path.join(DATA_DIR, DATE, camera, VIDEO_NAME)
-            video_decoder = VideoDecoder(video_path, device='cpu')
-            frame = video_decoder[frame_num]
-            print(f"Frame shape: {frame.shape}")
+        
+        process_args = [(save_dir, camera, frame_info) 
+                       for camera, frame_info in syncd_frames.items()]
+        
+        num_processes = min(len(process_args), multiprocessing.cpu_count())
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            pool.map(process_single_frame, process_args)
+        # process_single_frame(process_args[0])
 
-            frame_np = frame.numpy() # (3, H, W)
-            frame_np = frame_np.transpose(1, 2, 0) # (H, W, 3)
-            Image.fromarray(frame_np).save(frame_path)
-
+def save_syncd_info(syncd_info, save_path):
+    with open(save_path, "w") as f:
+        json.dump(syncd_info, f)
 
 if __name__ == "__main__":
-    avl_save_dir = Build_AVLtree()
-    print(f"AVL trees save directory: {avl_save_dir}!")
+    if not os.path.exists(SYNCED_INFO_SAVE_PATH):
+        avl_save_dir = Build_AVLtree()
+        print(f"AVL trees save directory: {avl_save_dir}!")
 
-    REFERENCE_CAMERA = "bric-rev1-001_cam0"
-    THRESHOLD = 50000
-    syncd_info = Search_Synced_Frames(REFERENCE_CAMERA, avl_save_dir, THRESHOLD)
-    print("Done for searching synced frames!")
-
+        # STEP 3: Set the reference camera and threshold
+        REFERENCE_CAMERA = "bric-rev1-001_cam0"
+        THRESHOLD = 10000
+        syncd_info = Search_Synced_Frames(REFERENCE_CAMERA, avl_save_dir, THRESHOLD)
+        print("Done for searching synced frames!")
+        save_syncd_info(syncd_info, SYNCED_INFO_SAVE_PATH)
+        # STEP 4: Save the synced frames
+    else:
+        with open(SYNCED_INFO_SAVE_PATH, "r") as f:
+            syncd_info = json.load(f)
+    
     Save_Synced_Frames(syncd_info)
     print("Done for saving synced frames!")
